@@ -1,0 +1,7 @@
+{
+  "DEBUG": true,
+  "SECRET_KEY": "YOUR-SECRET-KEY",
+  "SQLALCHEMY_TRACK_MODIFICATIONS": true,
+  "SQLALCHEMY_DATABASE_URI": "postgresql+psycopg2://user:pass@ip/dbname",
+  "WEBHOOK_HANDLER_API_URL": "/WEBHOOK_HANDLER_URL"
+}
