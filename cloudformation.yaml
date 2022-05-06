@@ -5,15 +5,16 @@ Metadata:
   Author: V.Chaikovskyi
 
 Parameters:
+
   APIGatewayPostEndpoint:
     Type: String
-  LambdaRoleArn:
-    Type: String
-    Description: Role for lambda handler
+    Default: /statement
+
   ServerAMI:
     Type: String
     Default: ami-0042da0ea9ad6dd83
     Description: AMI for Main Server
+
   AllowHTTPAccessOnServer:
     Type: String
     Default: "false"
@@ -22,6 +23,7 @@ Parameters:
       - "false"
     Description: Whether to allow HTTP access
     ConstraintDescription: true or false values are allowed
+
   AllowPostgressAccessOnServer:
     Type: String
     Default: "false"
@@ -30,17 +32,26 @@ Parameters:
       - "false"
     Description: Whether to open port 5432 access or not
     ConstraintDescription: true or false values are allowed
+
   HandlerS3Bucket:
     Type: String
     Description: S3 Bucket with handler .zip
+    Default: chaikovskyi-code-bucket
+
   HandlerS3Key:
     Type: String
     Description: Key for .zip archive with handler definition
     Default: 'handler.zip'
 
+  DataBucketArn:
+    Type: String
+    Description: ARN of data bucket
+    Default: arn:aws:s3:::chaikovskyi-vlad
+
 Conditions:
   AllowPostgresAccess: !Equals [ !Ref AllowPostgressAccessOnServer, 'true' ]
   AllowHTTPAccess: !Equals [ !Ref AllowHTTPAccessOnServer, 'true' ]
+
 
 Resources:
   MainServerInstace:
@@ -140,6 +151,7 @@ Resources:
 
   LambdaHandler:
     Type: AWS::Lambda::Function
+    DependsOn: LambdaHandlerRole
     Properties:
       FunctionName: api-gateway-post-handler
       Handler: handler.lambda_handler
@@ -147,9 +159,112 @@ Resources:
       Code:
         S3Bucket: !Ref HandlerS3Bucket
         S3Key: !Ref HandlerS3Key
-      Role: !Ref LambdaRoleArn
+      Role: !GetAtt LambdaHandlerRole.Arn
       Timeout: 30
       MemorySize: 128
+
+  LambdaHandlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LambdaHandlerRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  S3PutObjectPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: LambdaHandlerRole
+    Properties:
+      PolicyName: S3PutOjbectPolicy
+      Roles:
+        - !Ref LambdaHandlerRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - 's3:PutObject'
+            Resource: !Join [ '/', [ !Ref DataBucketArn,'*' ] ]
+
+  S3GetObjectPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: LambdaSQSPusherRole
+    Properties:
+      PolicyName: S3GetObjectPolicy
+      Roles:
+        - !Ref LambdaSQSPusherRole
+        - !Ref LambdaHandlerRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - 's3:GetObject'
+            Resource: !Join [ '/', [ !Ref DataBucketArn,'*' ] ]
+
+  SQSSendMessagePolicy:
+    Type: AWS::IAM::Policy
+    DependsOn:
+      - LambdaSQSPusherRole
+      - StatementQueue
+    Properties:
+      PolicyName: SQSSendMessagePolicyTest
+      Roles:
+        - !Ref LambdaSQSPusherRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'sqs:SendMessage'
+            Resource: !GetAtt StatementQueue.Arn
+
+  LambdaSQSPusherRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: S3LambdaEventHandlerRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  LambdaSQSPusher:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaSQSPusherRole
+    Properties:
+      FunctionName: sqs-pusher
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaSQSPusherRole.Arn
+      Code:
+        S3Bucket: 'chaikovskyi-code-bucket'
+        S3Key: 'handler.zip'
+      Runtime: python3.9
+      Timeout: 30
+      MemorySize: 128
+
+  StatementQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: StatementQueue
+
+
 
 Outputs:
   WithOpenHTTP:
@@ -167,3 +282,7 @@ Outputs:
   InstancePrivateIp:
     Description: Main Server private IP
     Value: !GetAtt MainServerInstace.PrivateIp
+
+  QueueUrl:
+    Description: Queue URL
+    Value: !GetAtt StatementQueue.QueueUrl
