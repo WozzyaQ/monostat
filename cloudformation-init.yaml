@@ -1,0 +1,252 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Template for creating HTTP API gateway and target lambda function
+
+Metadata:
+  Author: V.Chaikovskyi
+
+Parameters:
+
+  APIGatewayPostEndpoint:
+    Type: String
+    Default: /statement
+
+  ServerAMI:
+    Type: String
+    Default: ami-0042da0ea9ad6dd83
+    Description: AMI for Main Server
+
+  AllowHTTPAccessOnServer:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Whether to allow HTTP access
+    ConstraintDescription: true or false values are allowed
+
+  AllowPostgressAccessOnServer:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Whether to open port 5432 access or not
+    ConstraintDescription: true or false values are allowed
+
+  HandlerS3Bucket:
+    Type: String
+    Description: S3 Bucket with handler .zip
+    Default: chaikovskyi-code-bucket
+
+  HandlerS3Key:
+    Type: String
+    Description: Key for .zip archive with handler definition
+    Default: 'handler.zip'
+
+Conditions:
+  AllowPostgresAccess: !Equals [ !Ref AllowPostgressAccessOnServer, 'true' ]
+  AllowHTTPAccess: !Equals [ !Ref AllowHTTPAccessOnServer, 'true' ]
+
+
+Resources:
+  MainServerInstace:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref ServerAMI
+      InstanceType: t2.micro
+      SecurityGroups:
+        - !Ref SSHSecurityGroup
+      Tags:
+        - Key: Name
+          Value: MainServer
+
+  SSHSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: instance-sg
+      GroupDescription: Enable SSH via port 22 and optionally port 5432
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          FromPort: 22
+          IpProtocol: TCP
+          ToPort: 22
+        - !If
+          - AllowHTTPAccess
+          - CidrIp: 0.0.0.0/0
+            FromPort: 80
+            ToPort: 80
+            IpProtocol: TCP
+          - !Ref AWS::NoValue
+        - !If
+          - AllowPostgresAccess
+          - IpProtocol: TCP
+            FromPort: 5432
+            ToPort: 5432
+            CidrIp: 0.0.0.0/0
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: SG for MainServer
+  APIGateway:
+    DependsOn: LambdaHandler
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: HTTP API Gateway for integration with Lambda
+      ProtocolType: HTTP
+
+  LambdaHandlerInvokePermission:
+    Type: AWS::Lambda::Permission
+    DependsOn: APIGateway
+    Properties:
+      FunctionName: !GetAtt LambdaHandler.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${APIGateway}/*'
+
+  APIGatewayLambdaIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref APIGateway
+      Description: Lambda proxy integration
+      IntegrationType: AWS_PROXY
+      IntegrationMethod: POST
+      PayloadFormatVersion: '2.0'
+      IntegrationUri: !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaHandler.Arn}/invocations'
+
+  APIGatewayDeployment:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn: APIGatewayRoute
+    Properties:
+      Description: My deployment
+      ApiId: !Ref APIGateway
+
+  APIGatewayStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      StageName: api
+      Description: ProductionStage
+      DeploymentId: !Ref APIGatewayDeployment
+      ApiId: !Ref APIGateway
+
+  APIGatewayRoute:
+    Type: AWS::ApiGatewayV2::Route
+    DependsOn:
+      - APIGatewayLambdaIntegration
+    Properties:
+      ApiId: !Ref APIGateway
+      RouteKey: !Join
+        - ' '
+        - - POST
+          - !Ref APIGatewayPostEndpoint
+      AuthorizationType: NONE
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref APIGatewayLambdaIntegration
+
+  LambdaHandler:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaHandlerRole
+    Properties:
+      FunctionName: api-gateway-post-handler
+      Handler: handler.lambda_handler
+      Runtime: python3.9
+      Code:
+        S3Bucket: !Ref HandlerS3Bucket
+        S3Key: !Ref HandlerS3Key
+      Role: !GetAtt LambdaHandlerRole.Arn
+      Timeout: 30
+      MemorySize: 128
+
+  LambdaHandlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LambdaHandlerRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+
+  SQSSendMessagePolicy:
+    Type: AWS::IAM::Policy
+    DependsOn:
+      - LambdaSQSPusherRole
+      - StatementQueue
+    Properties:
+      PolicyName: SQSSendMessagePolicyTest
+      Roles:
+        - !Ref LambdaSQSPusherRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'sqs:SendMessage'
+            Resource: !GetAtt StatementQueue.Arn
+
+  LambdaSQSPusherRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: S3LambdaEventHandlerRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  LambdaSQSPusher:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaSQSPusherRole
+    Properties:
+      FunctionName: sqs-pusher
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaSQSPusherRole.Arn
+      Code:
+        S3Bucket: 'chaikovskyi-code-bucket'
+        S3Key: 'handler.zip'
+      Runtime: python3.9
+      Timeout: 30
+      MemorySize: 128
+
+  StatementQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: StatementQueue
+
+
+Outputs:
+  WithOpenHTTP:
+    Description: Whether port 80 (HTTP) open or not
+    Value: !Ref AllowHTTPAccessOnServer
+
+  WithPostgresAccess:
+    Description: Whether port 5432 (Postgres) open or not
+    Value: !Ref AllowPostgressAccessOnServer
+
+  InstancePublicIp:
+    Description: Main Server public IP
+    Value: !GetAtt MainServerInstace.PublicIp
+
+  InstancePrivateIp:
+    Description: Main Server private IP
+    Value: !GetAtt MainServerInstace.PrivateIp
+
+  QueueUrl:
+    Description: Queue URL
+    Value: !GetAtt StatementQueue.QueueUrl

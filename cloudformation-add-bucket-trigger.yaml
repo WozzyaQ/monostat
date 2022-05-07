@@ -43,10 +43,11 @@ Parameters:
     Description: Key for .zip archive with handler definition
     Default: 'handler.zip'
 
-  DataBucketArn:
+  DataBucketPrefix:
     Type: String
-    Description: ARN of data bucket
-    Default: arn:aws:s3:::chaikovskyi-vlad
+    Description: Prefix for raw data to be put
+    Default: 'data'
+
 
 Conditions:
   AllowPostgresAccess: !Equals [ !Ref AllowPostgressAccessOnServer, 'true' ]
@@ -180,36 +181,6 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
-  S3PutObjectPolicy:
-    Type: AWS::IAM::Policy
-    DependsOn: LambdaHandlerRole
-    Properties:
-      PolicyName: S3PutOjbectPolicy
-      Roles:
-        - !Ref LambdaHandlerRole
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Action:
-              - 's3:PutObject'
-            Resource: !Join [ '/', [ !Ref DataBucketArn,'*' ] ]
-
-  S3GetObjectPolicy:
-    Type: AWS::IAM::Policy
-    DependsOn: LambdaSQSPusherRole
-    Properties:
-      PolicyName: S3GetObjectPolicy
-      Roles:
-        - !Ref LambdaSQSPusherRole
-        - !Ref LambdaHandlerRole
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Action:
-              - 's3:GetObject'
-            Resource: !Join [ '/', [ !Ref DataBucketArn,'*' ] ]
 
   SQSSendMessagePolicy:
     Type: AWS::IAM::Policy
@@ -264,6 +235,76 @@ Resources:
     Properties:
       QueueName: StatementQueue
 
+  S3DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+#- ------------------------------- UPDATES -------------------------------- -#
+      NotificationConfiguration: # Note: when deleting stack the event configuration won't be deleted
+        LambdaConfigurations: # from the bucket
+          - Event: s3:ObjectCreated:Put
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: !Ref DataBucketPrefix
+            Function: !GetAtt LambdaSQSPusher.Arn
+
+  LambdaSQSPusherInvokePermission:
+    Type: AWS::Lambda::Permission
+    DependsOn: LambdaSQSPusher
+    Properties:
+      FunctionName: !GetAtt LambdaSQSPusher.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+
+  S3PutObjectPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: LambdaHandlerRole
+    Properties:
+      PolicyName: S3PutOjbectPolicy
+      Roles:
+        - !Ref LambdaHandlerRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - 's3:PutObject'
+            Resource: !Join [ '/', [ !GetAtt S3DataBucket.Arn,'*' ] ]
+
+  S3GetObjectPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: LambdaSQSPusherRole
+    Properties:
+      PolicyName: S3GetObjectPolicy
+      Roles:
+        - !Ref LambdaSQSPusherRole
+        - !Ref LambdaHandlerRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - 's3:GetObject'
+            Resource: !Join [ '/', [ !GetAtt S3DataBucket.Arn, !Ref DataBucketPrefix ,'*' ] ]
+
+
+  BucketNotificationPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: BucketNotificationPolicy
+      Roles:
+        - !Ref LambdaSQSPusherRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - 's3:PutBucketNotification'
+            Resource: !Join [ '/', [ !GetAtt S3DataBucket.Arn, !Ref DataBucketPrefix ,'*' ] ]
+
+#- ------------------------------- END -------------------------------- -#
 
 
 Outputs:
