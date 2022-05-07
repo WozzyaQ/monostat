@@ -212,7 +212,9 @@ Resources:
 
   LambdaSQSPusher:
     Type: AWS::Lambda::Function
-    DependsOn: LambdaSQSPusherRole
+    DependsOn:
+      - LambdaSQSPusherRole
+      - StatementQueue
     Properties:
       FunctionName: sqs-pusher
       Handler: handler.lambda_handler
