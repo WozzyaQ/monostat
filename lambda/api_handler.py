@@ -10,7 +10,7 @@ s3 = boto3.client('s3')
 S3_OUTPUT_BUCKET = os.environ['OUTPUT_BUCKET']
 S3_ERROR_BUCKET = os.environ['ERROR_BUCKET']
 
-BASE_PREFIX = os.environ.get('BASE_PREFIX', '')
+BASE_PREFIX = os.environ.get('BASE_PREFIX', 'data')
 
 
 def prepare_statement(body):

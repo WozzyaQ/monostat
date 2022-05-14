@@ -46,7 +46,7 @@ Parameters:
   OutputBucket:
     Type: String
     Description: Bucket for raw data
-    Default: 'chaikovskyi-vladyslav'
+    Default: 'chaikovskyi-vlad'
 
   DataPrefix:
     Type: String
@@ -55,7 +55,7 @@ Parameters:
   ErrorBucket:
     Type: String
     Description: Bucket for records that were unable to be processed
-    Default: 'chaikovskyi-vladyslav'
+    Default: 'chaikovskyi-vlad'
 
 
 Conditions:
@@ -68,6 +68,7 @@ Resources:
     Type: AWS::EC2::Instance
     Properties:
       ImageId: !Ref ServerAMI
+      KeyName: ParisEC2KeyPair
       InstanceType: t2.micro
       SecurityGroups:
         - !Ref SSHSecurityGroup
@@ -257,7 +258,7 @@ Resources:
     Properties:
       QueueName: StatementQueue
 
-  #- ------------------------------- STEP 2 ------------------------------------------------------------------------------ -#
+    #- ------------------------------- STEP 2 ------------------------------------------------------------------------------ -#
   S3DataBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
